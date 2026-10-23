@@ -1,0 +1,256 @@
+# All tunables live here. The config hash (sentinel.config.config_hash) is stored in models and event records.
+seed: 1337
+
+paths:
+  data_raw: data/raw
+  data_own: data/own
+  data_bench: data/bench
+  manifest: data/manifest.csv
+  results_json: results/results.json
+  tables: results/tables
+  figures: results/figures
+  models: models
+  runs: runs
+  docs: docs
+
+audio:
+  sr: 16000
+  window_s: 1.0
+  hop_s: 0.5
+
+classes: [drone, aircraft, ambient]
+
+datasets:
+  esc50:
+    enabled: true
+    repo: karolpiczak/ESC-50        # verified reachable on GitHub, CC BY-NC 3.0 (see docs/data_notes.md)
+    dir: esc50
+    aircraft: [airplane, helicopter]
+    ambient: [rain, wind, thunderstorm, sea_waves, crickets, insects, chirping_birds,
+              crow, rooster, hen, footsteps, clapping, laughing, siren, car_horn, church_bells]
+    hard_negative: [engine, train, vacuum_cleaner, washing_machine, chainsaw, hand_saw]
+  dads:
+    enabled: true
+    repo: gr1047/drone-audio-detection-samples
+    dir: dads
+    # Layout is UNVERIFIED (HuggingFace was not reachable while writing M0).
+    # Fill these after `python scripts/inspect_dads.py` and reading docs/data_notes.md.
+    # Regexes are matched against the path relative to data/raw/dads (forward slashes).
+    audio_glob: null                 # e.g. "**/*.wav"
+    drone_path_regex: null           # paths matching this are label=drone
+    nondrone_path_regex: null        # paths matching this are label=ambient
+    group_regex: null                # first capture group = source recording id
+  al_emadi:
+    # Licence forbids defence, security and surveillance use (see docs/data_notes.md).
+    # Not downloaded and not used. Do not enable for this project.
+    enabled: false
+  own:
+    enabled: true
+    dir: data/own
+    # <place>_<yyyymmdd>_<hhmm>.wav ; always label=ambient, held out, used for false alarm evaluation only
+
+splits:
+  holdout_datasets: [own]            # never used for training
+  cv_folds: 5
+
+download:
+  max_gb_without_confirmation: 1.0
+
+# ---- M1: preprocessing, denoising, features. Values below are untuned engineering defaults;
+# ---- they are swept or ablated in M2/M3, they are not claimed to be optimal.
+preprocess:
+  bandpass: {low_hz: 100, high_hz: 7000, order: 4}   # order is per side, SOS cascade of 2*order poles
+
+denoise:
+  n_fft: 512                 # 32 ms at 16 kHz
+  hop: 128                   # 75 % overlap, Hann is COLA
+  noise:                     # rolling noise estimate, causal (frames <= t only) after the warm-up
+    window_s: 2.0            # trailing window searched for quiet frames
+    quiet_fraction: 0.2      # mean power of the quietest 20 % of frames in the window
+    update_every: 8          # frames between re-estimates
+    warm_s: 0.5              # first 0.5 s use the first 0.5 s as noise (live engine treats it as learning time)
+  specsub: {alpha: 2.0, beta: 0.02}          # over-subtraction factor, spectral floor (Boll style, power domain)
+  wiener: {dd_alpha: 0.98, gain_floor: 0.1}  # decision-directed a priori SNR, minimum gain
+  svd: {energy: 0.95, block_s: 2.0}          # keep k singular values reaching this energy share, per 2 s block
+
+variants: [none, specsub, wiener, svd_energy, svd_elbow]
+
+features:
+  cache_dir: data/features
+  n_mfcc: 20
+  n_mels: 40
+  n_fft: 512
+  hop: 160                   # 10 ms
+  fmin: 100
+  fmax: 7000
+  contrast_bands: 6          # fmin * 2**6 = 6400 Hz stays below Nyquist
+  rolloff_percent: 0.85
+  delta_width: 9
+  n_jobs: -1
+
+# ---- M2: SVD denoising experiment and PCA variance analysis. Descriptive settings, not tuned for accuracy.
+m2:
+  synthetic:                 # known-ground-truth testbed for the SVD denoiser. These are NOT drone recordings.
+    duration_s: 5.0
+    realizations: 3          # independent random draws of each clean signal
+    snr_db: [-5, 0, 5, 10, 20]   # broadband SNR after the band-pass
+    rotor:                   # steady harmonic stack with slow pitch drift and amplitude modulation
+      f0_hz: 120.0
+      drift_hz: 6.0
+      drift_rate_hz: 0.3
+      am_depth: 0.3
+      am_rate_hz: 4.0
+      max_hz: 6500.0
+    bursts:                  # impulsive band-limited bursts (a non-stationary, low-rank-unfriendly signal)
+      rate_hz: 3.0
+      decay_ms: 60.0
+      band_hz: [300.0, 3000.0]
+    noise:
+      white: true
+      ambient_categories: [rain, wind, sea_waves, chirping_birds]
+      clips_per_category: 2
+      max_zero_fraction: 0.01   # skip clips with padded digital silence
+  sweep:
+    energy: [0.90, 0.92, 0.95, 0.97, 0.99]
+    fixed_rank: [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 64, 128, 250]   # 250 = all frames of a 2 s block (full rank)
+    rank_curve_snr_db: 0
+  real_clips:
+    per_group: 30            # clips per group (aircraft, ambient, hard_negative) for the no-ground-truth table
+  pca:
+    variance_targets: [0.90, 0.95, 0.99]
+    scree_components: 40
+    level_feature_prefixes: [mfcc00_, rms_, contrast]
+
+# ---- M3: SVM with grouped cross-validation and the ablation grid.
+m3:
+  silence_gate_rms: 1.0e-4       # windows whose band-passed (variant `none`) mean frame RMS is below this never reach the SVM
+                                 # (same definition as scripts/audit_silence.py and the M2 near-silent count)
+  class_weight: balanced
+  level_feature_prefixes: [mfcc00_, rms_, contrast]   # loudness-related features (18 of 146)
+  feature_groups:                # every feature belongs to exactly one group (checked in tests)
+    mfcc: [mfcc]
+    delta_mfcc: [dmfcc]
+    delta2_mfcc: [ddmfcc]
+    spectral_shape: [centroid, bandwidth, rolloff, flatness]
+    contrast: [contrast]
+    zcr_rms: [zcr, rms]
+  default:                       # pipeline used by `make train`; untuned, the ablation decides
+    variant: none
+    drop_level_features: false
+    pca: 40
+    svm: {kernel: rbf, C: 1.0}
+  grid:
+    variants: [none, specsub, wiener, svd_energy, svd_elbow]
+    drop_level_features: [false, true]
+    pca: [null, 10, 20, 40, 80]  # null = no PCA (all z-scored features)
+    svm:
+      - {kernel: linear, C: 1.0}
+      - {kernel: rbf, C: 1.0}
+      - {kernel: rbf, C: 10.0}
+  nested:
+    inner_folds: 3
+  bootstrap: {n: 2000}           # group bootstrap for confidence intervals
+  permutation_checks: 3          # label-permutation sanity runs in `make train`
+  group_study:                   # feature-group ablation: fixed pipeline, one group left out or kept alone
+    variant: none
+    svm: {kernel: rbf, C: 1.0}
+
+# ---- M4: noise robustness and the final pipeline. Engineering defaults, not tuned for accuracy.
+m4:
+  positive_classes: [aircraft]   # classes that get a calibrated probability (drone is added when its data exists)
+  robustness:
+    variants: [none, wiener, svd_elbow]   # denoising variants evaluated; others (specsub, svd_energy) work the same, add them here
+    kinds: [white, pink, ambient]         # white and pink are synthetic; ambient = real ESC-50 recordings from other source groups
+    snr_db: [15, 5, -5]          # nominal SNR against the median aircraft clip (in-band power). The noise level is the SAME
+                                 # absolute level for every clip, so quiet clips end up at a worse SNR than loud ones.
+    ambient_noise:
+      categories: [rain, wind, sea_waves, chirping_birds]
+      max_zero_fraction: 0.01
+    cache_dir: data/features_noisy
+    n_bootstrap: 1000
+    augmentation:                # train on clean + noisy windows of the OTHER noise kinds, test on the held-out kind
+      enabled: true
+      variants: [none]
+  final:
+    config: default              # "default" = m3.default (fixed before the ablation ran); or a mapping with the same keys
+  operating:
+    target_window_far: 0.05      # engineering default for the saved threshold; M6 sets the real operating point
+    far_grid: [0.01, 0.02, 0.05, 0.10, 0.20]
+    calibration_bins: 10         # equal-count bins for the reliability table
+  latency:
+    n_windows: 200
+    warmup: 10
+    threads: 1                   # BLAS/OpenMP threads during the timing run
+
+# ---- M5: streaming engine, alert logic, event logging. Engineering defaults, not tuned; M6 picks the operating point.
+m5:
+  sensor_id: acoustic-01
+  stream:
+    chunk_s: 0.25                # audio chunk size handed to the engine by every source
+    queue_s: 30.0                # live sources buffer at most this much audio; beyond that chunks are dropped and counted
+  alert:                         # see src/sentinel/alerting.py
+    ema_alpha: 0.5               # EMA weight of the newest window probability
+    t_on: null                   # null = the saved model threshold of the class (m4.operating.target_window_far)
+    t_off: null                  # null = t_off_ratio * t_on
+    t_off_ratio: 0.6
+    n_on: 3                      # ON when the smoothed probability is at or above t_on in n_on of the last m_window windows
+    m_window: 5
+    k_off: 4                     # OFF after k_off consecutive windows below t_off
+    min_event_s: 2.0             # shorter events are dropped
+    merge_gap_s: 3.0             # events closer than this are merged (so an event is final merge_gap_s after it ends)
+    reject_below: null           # window label becomes "unknown" if no class reaches this probability (display only)
+  snr:                           # per-event SNR estimate, power subtraction against a rolling noise floor
+    frame_s: 0.02
+    percentile: 10               # noise floor = this percentile of frame power over the history
+    history_s: 60.0              # only windows that are not at or above their class threshold feed the floor
+    min_frames: 50               # no estimate (null in the event) until the floor has this many frames (1 s)
+  tcp: {host: 127.0.0.1, port: 5005}
+  zmq: {endpoint: "tcp://127.0.0.1:5556", topic: acoustic}   # publisher PUB socket, see src/sentinel/zmqpub.py
+  monitor:
+    refresh_hz: 4
+    events_shown: 8
+  check:                         # scripts/check_streaming.py (make stream-check)
+    cache_dir: data/features_causal
+    n_jobs: null                 # null = features.n_jobs
+    chunk_sizes_s: [0.25, 1.0, 0.0173]   # chunk-size invariance test
+    n_clips_invariance: 4
+    n_bootstrap: 1000
+    rtf_seconds: 60.0
+    snr_db: [0, 5, 10, 20]
+    snr_trials: 6
+
+# ---- M6: scenarios, false-alarm evaluation, operating point. Everything is ESC-50 aircraft versus ambient (no drone class).
+m6:
+  scenarios:
+    dir: data/scenarios
+    duration_s: 240              # length of each stream
+    n_targets: 8                 # aircraft clips embedded per stream
+    min_gap_s: 12.0              # silence between embedded clips (more than m5.alert.merge_gap_s)
+    margin_s: 10.0               # no clip in the first and last margin_s seconds (noise floor warm-up)
+    bg_inband_rms: 0.02          # the background stream is scaled to this in-band rms, so its level is the same at every SNR
+    snr_db: [20, 10, 5, 0, -5]   # in-band power of the embedded clip over the in-band power of the whole background stream
+    match_tol_s: 1.0             # an alert event counts for a clip if it overlaps the clip interval widened by this much
+  false_alarms:
+    max_per_hour: 1.0            # operating point rule: at most this many false alarms per hour
+    own_dir: data/own            # long no-target recordings of the user; never seen by training
+    min_own_hours: 1.0           # the operating point uses own recordings only if there are at least this many hours
+    sweep: {t_on_min: 0.04, t_on_max: 0.96, step: 0.02}   # alert-ON threshold on the smoothed probability
+    selection_snrs: null         # scenario SNRs whose event recall is averaged to pick the point; null = all
+    chunk_s: 1.0
+
+# ---- M7: detection range model (spherical spreading) and bench distance test. A model estimate, not a measurement.
+m7:
+  d0_m: 1.0                      # reference distance of the source level
+  drone_source_level_db_at_1m: null   # TODO_CITE: no source level is assumed. Set it from a cited measurement (dB, broadband) to get a range estimate.
+  ambient_level_db_site: null    # broadband ambient level at the site in dB, same reference as the source level. null = not set.
+  alpha_db_per_m: 0.0            # atmospheric absorption in dB per metre. 0 = ignored. If used, take it from ISO 9613-1 for the site's temperature and humidity.
+  recall_target: 0.9             # snr_min_db = lowest SNR from which the recall stays at or above this (spec: 0.9)
+  primary_curve: m6_event_recall_at_operating_point   # recall-versus-SNR curve that defines snr_min_db (see sentinel.range_model.curves_from_results)
+  recall_targets_reported: [0.9, 0.5, 0.25, 0.1]      # also reported for information, never used silently in place of recall_target
+  sensitivity:
+    source_levels_db: [60, 65, 70, 75, 80, 85, 90]
+    ambient_levels_db: [35, 45, 55, 65]
+    hypothetical_snr_min_db: [20, 10, 0]   # required SNRs shown in the table and plot when the measured curve gives no snr_min_db
+  bench:
+    noise_file: bench_noise.wav  # optional recording of the room and microphone with the speaker silent, same gain settings
+    active_snr_db: 3.0           # detection rate is taken over windows whose own SNR estimate is at least this (the playback), not the lead-in silence

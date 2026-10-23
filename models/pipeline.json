@@ -1,0 +1,62 @@
+{
+  "built_at": "2026-10-20T03:42:27+00:00",
+  "bundle_version": "m4-1",
+  "calibrators": {
+    "aircraft": {
+      "a": 1.2322187453528153,
+      "b": -1.9042730285394402,
+      "fitted_at_prior": 0.08606309682098393
+    }
+  },
+  "class_weight": "balanced",
+  "classes": [
+    "aircraft",
+    "ambient"
+  ],
+  "code_version": "m1-1",
+  "config_hash": "f843177f7a80",
+  "drop_level_features": false,
+  "final_config": {
+    "drop_level_features": false,
+    "pca": 40,
+    "svm": {
+      "C": 1.0,
+      "kernel": "rbf"
+    },
+    "variant": "none"
+  },
+  "n_components": 40,
+  "n_features_in": 146,
+  "n_features_used": 146,
+  "n_support_vectors": [
+    343,
+    2649
+  ],
+  "n_training_windows": 8273,
+  "pipeline_hash": "16d74ac77d00959d",
+  "silence_gate_rms": 0.0001,
+  "svm": {
+    "C": 1.0,
+    "kernel": "rbf"
+  },
+  "target_window_far": 0.05,
+  "targets": [
+    "aircraft"
+  ],
+  "thresholds": {
+    "aircraft": 0.30258186430498857
+  },
+  "training_windows": {
+    "aircraft": 712,
+    "ambient": 7561
+  },
+  "variant": "none",
+  "versions": {
+    "joblib": "1.6.0",
+    "librosa": "0.11.0",
+    "numpy": "2.4.6",
+    "python": "3.11.17",
+    "scipy": "1.17.1",
+    "sklearn": "1.9.1"
+  }
+}

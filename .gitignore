@@ -1,0 +1,7 @@
+.venv/
+data/raw/
+data/features*/
+data/scenarios/
+runs/
+__pycache__/
+*.pyc

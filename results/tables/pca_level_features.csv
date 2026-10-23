@@ -1,0 +1,16 @@
+variant,feature,component,spearman
+none,rms_mean,PC1,0.05674642605662649
+none,rms_mean,PC2,-0.5775034467221165
+none,rms_mean,PC3,-0.1493688090235614
+none,mfcc00_mean,PC1,-0.13145826598530955
+none,mfcc00_mean,PC2,-0.49874536501913247
+none,mfcc00_mean,PC3,-0.03057524521286965
+none,mfcc00_std,PC1,0.6663571697510915
+none,mfcc00_std,PC2,0.4487353405168553
+none,mfcc00_std,PC3,0.1243051405422362
+none,centroid_mean,PC1,0.09202214121036863
+none,centroid_mean,PC2,0.4928178247083165
+none,centroid_mean,PC3,0.01060811545262608
+none,zcr_mean,PC1,0.3020008024106804
+none,zcr_mean,PC2,0.27799221075380376
+none,zcr_mean,PC3,0.047529752538485605

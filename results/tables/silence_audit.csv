@@ -1,0 +1,4 @@
+bucket,windows,files,rms_below_1e-4,rms_below_1e-4_pct,rms_below_1e-4_files_half_or_more,rms_below_1e-3,rms_below_1e-3_pct,rms_below_1e-3_files_half_or_more
+aircraft,720,80,8,1.111,1,8,1.111,1
+ambient,5760,640,338,5.868,26,440,7.639,38
+ambient_hard_negative,2160,240,21,0.972,0,28,1.296,1
